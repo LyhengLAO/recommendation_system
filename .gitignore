@@ -12,4 +12,4 @@ build/
 .env/
 
 data/
-
+!src/data/
