@@ -13,3 +13,6 @@ build/
 
 data/
 !src/data/
+
+models/
+!models/.gitkeep
