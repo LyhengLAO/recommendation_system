@@ -68,6 +68,7 @@ def load_features(path: Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
+    y_pred = np.where(y_pred == -1, 0, 1)
     precision = precision_score(y_true, y_pred, zero_division=0)
     recall    = recall_score(y_true, y_pred, zero_division=0)
     f1        = f1_score(y_true, y_pred, zero_division=0)
@@ -87,7 +88,7 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     logger.info("Classification report:\n%s", report)
     return metrics
 
-def objective(trial, X, y):
+def objective(trial, X: np.ndarray, y: np.ndarray) -> float:
     params = {
         "n_estimators":  trial.suggest_int("n_estimators", 50, 300, step=50),
         "contamination": trial.suggest_float("contamination", 0.01, 0.2),
@@ -98,25 +99,29 @@ def objective(trial, X, y):
     }
     model = IsolationForest(**params)
     model.fit(X)
-    return evaluate(model, X, y)["f1"]
-
+    y_pred = model.predict(X)
+    metrics = evaluate(y, y_pred)
+    trial.set_user_attr("precision", metrics["precision"])
+    trial.set_user_attr("recall", metrics["recall"])
+    return metrics["f1_score"]
 
 # --- model -------------------------------------------------------------------
 
 
-def train(X: np.ndarray) -> IsolationForest:
+def train(X: np.ndarray, y: np.ndarray) -> IsolationForest:
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     logger.info(
         "Training IsolationForest — n_estimators=%d, contamination=%.2f",
     )
     study = optuna.create_study(direction="maximize")
-    study.optimize(objective, n_trials=50, show_progress_bar=True)
+    study.optimize(lambda trial: objective(trial, X, y), n_trials=50, show_progress_bar=True)
 
     best_params = study.best_params
     best_model = IsolationForest(**best_params, random_state=42, n_jobs=-1)
     best_model.fit(X)
     logger.info("Training complete")
-    return best_model, best_params
+
+    return best_model, best_params, study
 
 
 def predict_labels(model: IsolationForest, X: np.ndarray) -> np.ndarray:
@@ -158,14 +163,28 @@ def main() -> None:
 
     X, y_true = load_features(FEATURES_FILE)
 
+    mlflow.set_tracking_uri("sqlite:///" + str(BASE / "mlflow.db").replace("\\", "/"))
     mlflow.set_experiment("anomaly-isolation-forest")
     with mlflow.start_run(run_name="iforest-api-logs"):
+
+        model, best_params, study = train(X, y_true)
+
+        for trial in study.trials:
+            mlflow.log_metrics(
+                {
+                    "trial_f1": trial.value,
+                    "trial_precision": trial.user_attrs.get("precision", 0.0),
+                    "trial_recall": trial.user_attrs.get("recall", 0.0),
+                },
+                step=trial.number,
+            )
+
+        mlflow.log_params(best_params)
         mlflow.log_param("n_features", len(FEATURE_COLS))
         mlflow.log_param("feature_cols", FEATURE_COLS)
         mlflow.log_param("n_samples", len(X))
         mlflow.log_param("anomaly_rate_true", float(y_true.mean()))
 
-        model, best_params = train(X, IF_PARAMS)
         y_pred = predict_labels(model, X)
 
         metrics = evaluate(y_true, y_pred)

@@ -16,3 +16,5 @@ data/
 
 models/
 !models/.gitkeep
+
+mlruns
