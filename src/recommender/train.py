@@ -10,6 +10,7 @@ import mlflow
 import numpy as np
 from implicit.als import AlternatingLeastSquares
 from scipy.sparse import csr_matrix, load_npz
+import optuna
 
 logging.basicConfig(
     level=logging.INFO,
@@ -22,8 +23,9 @@ BASE = Path(__file__).resolve().parents[2]
 MATRIX_FILE   = BASE / "data" / "processed" / "movielens_matrix.npz"
 USER_MAP_FILE = BASE / "data" / "processed" / "user_mapping.json"
 ITEM_MAP_FILE = BASE / "data" / "processed" / "item_mapping.json"
-MODEL_FILE    = BASE / "models" / "als_model.pkl"
+MODEL_FILE    = BASE / "models" / "best_model.pkl"
 MAPPINGS_FILE = BASE / "models" / "mappings.json"
+BEST_PARAMS_FILE = BASE / "models" / "best_params.json"
 
 # ALS hyper-parameters
 ALS_PARAMS = {
@@ -113,6 +115,37 @@ def train(train_matrix: csr_matrix, params: dict) -> AlternatingLeastSquares:
     logger.info("Training complete")
     return model
 
+def objective(trial, train_matrix: csr_matrix, test_matrix: csr_matrix) -> float:
+    model = AlternatingLeastSquares(
+        factors=trial.suggest_int("factors", 20, 200, step=50),
+        regularization=trial.suggest_float("regularization", 0.001, 1.0, log=True),
+        iterations=trial.suggest_int("iterations", 10, 100, step=10),
+        random_state=42,
+    )
+    model.fit(train_matrix.tocsr())
+
+    precision, recall = precision_recall_at_k(model, train_matrix=train_matrix, test_matrix=test_matrix, k=EVAL_K)
+
+    # optimise le F1 (équilibre précision/rappel)
+    f1 = 2 * (precision * recall) / (precision + recall + 1e-8)
+    return f1
+
+def train_optimized(train_matrix: csr_matrix, test_matrix: csr_matrix, n_trials: int = 30) -> AlternatingLeastSquares:
+    study = optuna.create_study(direction="maximize")
+    study.optimize(lambda trial: objective(trial, train_matrix, test_matrix), n_trials=n_trials, show_progress_bar=True)
+
+    best_params = study.best_params
+    logger.info("Best hyper-parameters: %s", best_params)
+
+    # Entraîner le modèle final avec les meilleurs hyper-paramètres
+    model = AlternatingLeastSquares(
+        factors=best_params["factors"],
+        regularization=best_params["regularization"],
+        iterations=best_params["iterations"],
+        random_state=42,
+    )
+    model.fit(train_matrix.tocsr())
+    return model, best_params
 
 def precision_recall_at_k(
     model: AlternatingLeastSquares,
@@ -161,6 +194,10 @@ def save_model(model: AlternatingLeastSquares, path: Path) -> None:
     size_kb = path.stat().st_size / 1024
     logger.info("Saved model → %s (%.1f KB)", path, size_kb)
 
+def save_json(data: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+    logger.info("Saved JSON → %s", path)
 
 def save_mappings(user_map: dict, item_map: dict, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -180,13 +217,12 @@ def main() -> None:
 
     mlflow.set_experiment("recommender-als")
     with mlflow.start_run(run_name="als-movielens-100k"):
-        mlflow.log_params(ALS_PARAMS)
         mlflow.log_param("eval_k", EVAL_K)
         mlflow.log_param("test_fraction", TEST_FRACTION)
         mlflow.log_param("n_users", matrix.shape[0])
         mlflow.log_param("n_items", matrix.shape[1])
 
-        model = train(train_matrix, ALS_PARAMS)
+        model, best_params = train_optimized(train_matrix, test_matrix)
 
         precision, recall = precision_recall_at_k(
             model, train_matrix, test_matrix, k=EVAL_K
@@ -196,9 +232,11 @@ def main() -> None:
 
         save_model(model, MODEL_FILE)
         save_mappings(user_map, item_map, MAPPINGS_FILE)
+        save_json(best_params, BEST_PARAMS_FILE)
 
         mlflow.log_artifact(str(MODEL_FILE))
         mlflow.log_artifact(str(MAPPINGS_FILE))
+        mlflow.log_artifact(str(BEST_PARAMS_FILE))
 
         logger.info(
             "MLflow run %s — precision@10=%.4f recall@10=%.4f",

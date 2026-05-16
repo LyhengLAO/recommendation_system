@@ -5,11 +5,13 @@ import pickle
 import sys
 from pathlib import Path
 
+import json
 import mlflow
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import classification_report, f1_score, precision_score, recall_score
+import optuna
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,7 +22,8 @@ logger = logging.getLogger(__name__)
 
 BASE = Path(__file__).resolve().parents[2]
 FEATURES_FILE = BASE / "data" / "processed" / "logs_features.csv"
-MODEL_FILE    = BASE / "models" / "isolation_forest.pkl"
+MODEL_FILE    = BASE / "models" / "best_isolation_forest.pkl"
+BEST_PARAMS_FILE = BASE / "models" / "best_isolation_forest_params.json"
 
 FEATURE_COLS = [
     "hour_scaled",
@@ -61,26 +64,6 @@ def load_features(path: Path) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-# --- model -------------------------------------------------------------------
-
-
-def train(X: np.ndarray, params: dict) -> IsolationForest:
-    logger.info(
-        "Training IsolationForest — n_estimators=%d, contamination=%.2f",
-        params["n_estimators"], params["contamination"],
-    )
-    model = IsolationForest(**params)
-    model.fit(X)
-    logger.info("Training complete")
-    return model
-
-
-def predict_labels(model: IsolationForest, X: np.ndarray) -> np.ndarray:
-    """Convert sklearn convention (-1/+1) to binary labels (1=anomaly, 0=normal)."""
-    raw = model.predict(X)          # -1 = anomaly, +1 = normal
-    return (raw == -1).astype(int)
-
-
 # --- evaluation --------------------------------------------------------------
 
 
@@ -104,6 +87,42 @@ def evaluate(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
     logger.info("Classification report:\n%s", report)
     return metrics
 
+def objective(trial, X, y):
+    params = {
+        "n_estimators":  trial.suggest_int("n_estimators", 50, 300, step=50),
+        "contamination": trial.suggest_float("contamination", 0.01, 0.2),
+        "max_features":  trial.suggest_float("max_features", 0.5, 1.0),
+        "bootstrap":     trial.suggest_categorical("bootstrap", [True, False]),
+        "random_state":  42,
+        "n_jobs":        -1,
+    }
+    model = IsolationForest(**params)
+    model.fit(X)
+    return evaluate(model, X, y)["f1"]
+
+
+# --- model -------------------------------------------------------------------
+
+
+def train(X: np.ndarray) -> IsolationForest:
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    logger.info(
+        "Training IsolationForest — n_estimators=%d, contamination=%.2f",
+    )
+    study = optuna.create_study(direction="maximize")
+    study.optimize(objective, n_trials=50, show_progress_bar=True)
+
+    best_params = study.best_params
+    best_model = IsolationForest(**best_params, random_state=42, n_jobs=-1)
+    best_model.fit(X)
+    logger.info("Training complete")
+    return best_model, best_params
+
+
+def predict_labels(model: IsolationForest, X: np.ndarray) -> np.ndarray:
+    """Convert sklearn convention (-1/+1) to binary labels (1=anomaly, 0=normal)."""
+    raw = model.predict(X)          # -1 = anomaly, +1 = normal
+    return (raw == -1).astype(int)
 
 def log_confusion(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     tp = int(((y_pred == 1) & (y_true == 1)).sum())
@@ -124,6 +143,10 @@ def save_model(model: IsolationForest, path: Path) -> None:
     size_kb = path.stat().st_size / 1024
     logger.info("Saved model → %s (%.1f KB)", path, size_kb)
 
+def save_json(data: dict, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2))
+    logger.info("Saved JSON → %s", path)
 
 # --- entry point -------------------------------------------------------------
 
@@ -137,13 +160,12 @@ def main() -> None:
 
     mlflow.set_experiment("anomaly-isolation-forest")
     with mlflow.start_run(run_name="iforest-api-logs"):
-        mlflow.log_params(IF_PARAMS)
         mlflow.log_param("n_features", len(FEATURE_COLS))
         mlflow.log_param("feature_cols", FEATURE_COLS)
         mlflow.log_param("n_samples", len(X))
         mlflow.log_param("anomaly_rate_true", float(y_true.mean()))
 
-        model = train(X, IF_PARAMS)
+        model, best_params = train(X, IF_PARAMS)
         y_pred = predict_labels(model, X)
 
         metrics = evaluate(y_true, y_pred)
@@ -151,7 +173,9 @@ def main() -> None:
         log_confusion(y_true, y_pred)
 
         save_model(model, MODEL_FILE)
+        save_json(best_params, BEST_PARAMS_FILE)
         mlflow.log_artifact(str(MODEL_FILE))
+        mlflow.log_artifact(str(BEST_PARAMS_FILE))
 
         logger.info(
             "MLflow run %s — F1=%.4f precision=%.4f recall=%.4f",
