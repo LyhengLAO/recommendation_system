@@ -1,0 +1,15 @@
+.env/
+.git/
+wandb/
+notebook/
+mlruns/
+mlflow.db
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.gitignore
+README.md
+.venv/
+venv/
+env/

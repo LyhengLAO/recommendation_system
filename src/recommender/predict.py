@@ -1,5 +1,7 @@
 """Inference layer for the ALS recommender — loads once, serves many calls."""
 
+from __future__ import annotations
+
 import json
 import logging
 import pickle

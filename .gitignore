@@ -9,15 +9,22 @@ dist/
 build/
 .eggs/
 .Python
-.env/
+.venv/
+.env
 
-data/
-!src/data/
+data/raw/
+data/processed/
+data/external/
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
 
 models/
 !models/.gitkeep
 
 mlruns
 mlflow.db
-
 wandb/
+
+*.log
+logs/
