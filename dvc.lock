@@ -1,0 +1,122 @@
+schema: '2.0'
+stages:
+  download:
+    cmd: python src/data/download.py
+    deps:
+    - path: src/data/download.py
+      hash: md5
+      md5: 4cf18ad00277a49125301c7d795faf9d
+      size: 3196
+    outs:
+    - path: data/raw/movielens
+      hash: md5
+      md5: 33e3b98f41ab1289116f74de90b95a24.dir
+      size: 16100896
+      nfiles: 23
+  generate_logs:
+    cmd: python src/data/generate_logs.py
+    deps:
+    - path: src/data/generate_logs.py
+      hash: md5
+      md5: 7e66ceffee5fac4ea60fb076673b7bf6
+      size: 6161
+    outs:
+    - path: data/raw/logs
+      hash: md5
+      md5: dc65b38c7c5586c41c294edbf49dea35.dir
+      size: 676091
+      nfiles: 1
+  preprocess_movielens:
+    cmd: python src/data/preprocess_movielens.py
+    deps:
+    - path: data/raw/movielens
+      hash: md5
+      md5: 33e3b98f41ab1289116f74de90b95a24.dir
+      size: 16100896
+      nfiles: 23
+    - path: src/data/preprocess_movielens.py
+      hash: md5
+      md5: 208198339142b50ca38970a4038144af
+      size: 4632
+    outs:
+    - path: data/processed/item_mapping.json
+      hash: md5
+      md5: f80871bf87fd2af9679bff9e4ba13411
+      size: 26363
+    - path: data/processed/movielens_matrix.npz
+      hash: md5
+      md5: fe157345f906bb8316e9cbf7e4f2f37c
+      size: 144102
+    - path: data/processed/user_mapping.json
+      hash: md5
+      md5: 362460c742e78c2f06f56ecd684ec3b0
+      size: 8342
+  preprocess_logs:
+    cmd: python src/data/preprocess_logs.py
+    deps:
+    - path: data/raw/logs
+      hash: md5
+      md5: dc65b38c7c5586c41c294edbf49dea35.dir
+      size: 676091
+      nfiles: 1
+    - path: src/data/preprocess_logs.py
+      hash: md5
+      md5: c7b93d2c2c93c1cb7aeff0a8c34c189a
+      size: 5969
+    outs:
+    - path: data/processed/logs_features.csv
+      hash: md5
+      md5: d4c5222117f8d279f148e93dce20157a
+      size: 1271531
+  train_recommender:
+    cmd: python src/recommender/train.py
+    deps:
+    - path: data/processed/item_mapping.json
+      hash: md5
+      md5: f80871bf87fd2af9679bff9e4ba13411
+      size: 26363
+    - path: data/processed/movielens_matrix.npz
+      hash: md5
+      md5: fe157345f906bb8316e9cbf7e4f2f37c
+      size: 144102
+    - path: data/processed/user_mapping.json
+      hash: md5
+      md5: 362460c742e78c2f06f56ecd684ec3b0
+      size: 8342
+    - path: src/recommender/train.py
+      hash: md5
+      md5: b7b51c51b99da8b4259334ac5a1e7177
+      size: 9938
+    outs:
+    - path: models/best_model.pkl
+      hash: md5
+      md5: d4c4c3cfe033979377486def3f0e2172
+      size: 180442
+    - path: models/best_params.json
+      hash: md5
+      md5: fdd83b5790025e09c6d618eb3f4ed5eb
+      size: 85
+    - path: models/mappings.json
+      hash: md5
+      md5: da9a52a967f58b5a435ea7d55cdd7ff7
+      size: 39250
+  train_anomaly:
+    cmd: python src/anomaly/train.py
+    deps:
+    - path: data/processed/logs_features.csv
+      hash: md5
+      md5: d4c5222117f8d279f148e93dce20157a
+      size: 1271531
+    - path: src/anomaly/train.py
+      hash: md5
+      md5: ae20f2ab9e89ebdb33fba0fe7615b4e3
+      size: 7726
+    outs:
+    - path: models/best_isolation_forest.pkl
+      hash: md5
+      md5: b182ab8eda97af608602709d7f3830ab
+      size: 588260
+    - path: models/best_isolation_forest_params.json
+      hash: md5
+      md5: d39f84cc44e165bf20fb7d04b3a88e83
+      size: 129

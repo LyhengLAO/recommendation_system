@@ -1,0 +1,58 @@
+stages:
+
+  download:
+    cmd: python src/data/download.py
+    deps:
+      - src/data/download.py
+    outs:
+      - data/raw/movielens
+
+  generate_logs:
+    cmd: python src/data/generate_logs.py
+    deps:
+      - src/data/generate_logs.py
+    outs:
+      - data/raw/logs
+
+  preprocess_movielens:
+    cmd: python src/data/preprocess_movielens.py
+    deps:
+      - src/data/preprocess_movielens.py
+      - data/raw/movielens
+    outs:
+      - data/processed/movielens_matrix.npz
+      - data/processed/user_mapping.json
+      - data/processed/item_mapping.json
+
+  preprocess_logs:
+    cmd: python src/data/preprocess_logs.py
+    deps:
+      - src/data/preprocess_logs.py
+      - data/raw/logs
+    outs:
+      - data/processed/logs_features.csv
+
+  train_recommender:
+    cmd: python src/recommender/train.py
+    deps:
+      - src/recommender/train.py
+      - data/processed/movielens_matrix.npz
+      - data/processed/user_mapping.json
+      - data/processed/item_mapping.json
+    outs:
+      - models/best_model.pkl
+      - models/mappings.json
+    metrics:
+      - models/best_params.json:
+          cache: false
+
+  train_anomaly:
+    cmd: python src/anomaly/train.py
+    deps:
+      - src/anomaly/train.py
+      - data/processed/logs_features.csv
+    outs:
+      - models/best_isolation_forest.pkl
+    metrics:
+      - models/best_isolation_forest_params.json:
+          cache: false
