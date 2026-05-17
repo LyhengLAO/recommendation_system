@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import mlflow
+import wandb
 import numpy as np
 from implicit.als import AlternatingLeastSquares
 from scipy.sparse import csr_matrix, load_npz
@@ -213,6 +214,17 @@ def main() -> None:
     user_map, item_map = load_mappings(USER_MAP_FILE, ITEM_MAP_FILE)
     train_matrix, test_matrix = train_test_split(matrix, TEST_FRACTION)
 
+    wandb.init(
+        project="recommender-als",
+        name="als-movielens-100k",
+        config={
+            "eval_k": EVAL_K,
+            "test_fraction": TEST_FRACTION,
+            "n_users": matrix.shape[0],
+            "n_items": matrix.shape[1],
+        },
+    )
+
     mlflow.set_tracking_uri("sqlite:///" + str(BASE / "mlflow.db").replace("\\", "/"))
     mlflow.set_experiment("recommender-als")
     with mlflow.start_run(run_name="als-movielens-100k"):
@@ -220,20 +232,20 @@ def main() -> None:
         model, best_params, study = train_optimized(train_matrix, test_matrix)
 
         for trial in study.trials:
-            mlflow.log_metrics(
-                {
-                    "trial_f1": trial.value,
-                    "trial_precision": trial.user_attrs.get("precision", 0.0),
-                    "trial_recall": trial.user_attrs.get("recall", 0.0),
-                },
-                step=trial.number,
-            )
+            step_metrics = {
+                "trial_f1": trial.value,
+                "trial_precision": trial.user_attrs.get("precision", 0.0),
+                "trial_recall": trial.user_attrs.get("recall", 0.0),
+            }
+            mlflow.log_metrics(step_metrics, step=trial.number)
+            wandb.log(step_metrics, step=trial.number)
 
         mlflow.log_params(best_params)
         mlflow.log_param("eval_k", EVAL_K)
         mlflow.log_param("test_fraction", TEST_FRACTION)
         mlflow.log_param("n_users", matrix.shape[0])
         mlflow.log_param("n_items", matrix.shape[1])
+        wandb.config.update(best_params)
 
         precision, recall = precision_recall_at_k(
             model, train_matrix, test_matrix, k=EVAL_K
@@ -241,6 +253,7 @@ def main() -> None:
 
         mlflow.log_metric("precision_at_10", precision)
         mlflow.log_metric("recall_at_10", recall)
+        wandb.log({"precision_at_10": precision, "recall_at_10": recall})
 
         save_model(model, MODEL_FILE)
         save_mappings(user_map, item_map, MAPPINGS_FILE)
@@ -249,6 +262,9 @@ def main() -> None:
         mlflow.log_artifact(str(MODEL_FILE))
         mlflow.log_artifact(str(MAPPINGS_FILE))
         mlflow.log_artifact(str(BEST_PARAMS_FILE))
+        wandb.save(str(MODEL_FILE))
+        wandb.save(str(MAPPINGS_FILE))
+        wandb.save(str(BEST_PARAMS_FILE))
 
         logger.info(
             "MLflow run %s — precision@10=%.4f recall@10=%.4f",
@@ -257,6 +273,7 @@ def main() -> None:
             recall,
         )
 
+    wandb.finish()
     logger.info("Training complete.")
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import json
 import mlflow
+import wandb
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import IsolationForest
@@ -135,7 +136,9 @@ def log_confusion(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     fn = int(((y_pred == 0) & (y_true == 1)).sum())
     tn = int(((y_pred == 0) & (y_true == 0)).sum())
     logger.info("Confusion matrix — TP:%d FP:%d FN:%d TN:%d", tp, fp, fn, tn)
-    mlflow.log_metrics({"tp": tp, "fp": fp, "fn": fn, "tn": tn})
+    conf = {"tp": tp, "fp": fp, "fn": fn, "tn": tn}
+    mlflow.log_metrics(conf)
+    wandb.log(conf)
 
 
 # --- I/O ---------------------------------------------------------------------
@@ -163,6 +166,17 @@ def main() -> None:
 
     X, y_true = load_features(FEATURES_FILE)
 
+    wandb.init(
+        project="anomaly-isolation-forest",
+        name="iforest-api-logs",
+        config={
+            "n_features": len(FEATURE_COLS),
+            "feature_cols": FEATURE_COLS,
+            "n_samples": int(len(X)),
+            "anomaly_rate_true": float(y_true.mean()),
+        },
+    )
+
     mlflow.set_tracking_uri("sqlite:///" + str(BASE / "mlflow.db").replace("\\", "/"))
     mlflow.set_experiment("anomaly-isolation-forest")
     with mlflow.start_run(run_name="iforest-api-logs"):
@@ -170,31 +184,34 @@ def main() -> None:
         model, best_params, study = train(X, y_true)
 
         for trial in study.trials:
-            mlflow.log_metrics(
-                {
-                    "trial_f1": trial.value,
-                    "trial_precision": trial.user_attrs.get("precision", 0.0),
-                    "trial_recall": trial.user_attrs.get("recall", 0.0),
-                },
-                step=trial.number,
-            )
+            step_metrics = {
+                "trial_f1": trial.value,
+                "trial_precision": trial.user_attrs.get("precision", 0.0),
+                "trial_recall": trial.user_attrs.get("recall", 0.0),
+            }
+            mlflow.log_metrics(step_metrics, step=trial.number)
+            wandb.log(step_metrics, step=trial.number)
 
         mlflow.log_params(best_params)
         mlflow.log_param("n_features", len(FEATURE_COLS))
         mlflow.log_param("feature_cols", FEATURE_COLS)
         mlflow.log_param("n_samples", len(X))
         mlflow.log_param("anomaly_rate_true", float(y_true.mean()))
+        wandb.config.update(best_params)
 
         y_pred = predict_labels(model, X)
 
         metrics = evaluate(y_true, y_pred)
         mlflow.log_metrics(metrics)
+        wandb.log(metrics)
         log_confusion(y_true, y_pred)
 
         save_model(model, MODEL_FILE)
         save_json(best_params, BEST_PARAMS_FILE)
         mlflow.log_artifact(str(MODEL_FILE))
         mlflow.log_artifact(str(BEST_PARAMS_FILE))
+        wandb.save(str(MODEL_FILE))
+        wandb.save(str(BEST_PARAMS_FILE))
 
         logger.info(
             "MLflow run %s — F1=%.4f precision=%.4f recall=%.4f",
@@ -204,6 +221,7 @@ def main() -> None:
             metrics["recall"],
         )
 
+    wandb.finish()
     logger.info("Training complete.")
 
 
